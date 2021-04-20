@@ -13,6 +13,8 @@
 
 int serverList(char*, int);
 int list();
+int changeServerDirectory(char*, int);
+int changeDirectory(char*);
 int getSocket(char*, char*);
 int getDataConnection(char*, int);
 
@@ -28,15 +30,14 @@ int main(char argc, char ** argv){
 	memset(&hints, 0, sizeof(hints));
 	int err;
 	socketfd = getSocket(hostname, portnum);
+	changeServerDirectory("..", socketfd);
 	serverList(hostname, socketfd);
 	char buffer[100] = "Q\n";
-	printf("writing %s\n", buffer);
 	if (write(socketfd, buffer,2) < 0){
 		perror("Write: ");
 		return -errno;
 	}
 	fflush(stdout);
-	printf("reading\n");
 	if (read(socketfd, buffer, 1) < 0){
 		perror("Read: ");
 		return -errno;
@@ -45,6 +46,7 @@ int main(char argc, char ** argv){
 		printf("success\n");
 	}
 	else printf ("error\n");
+	changeDirectory("..");
 	list();
 	return 0;
 	
@@ -79,12 +81,12 @@ int getDataConnection(char* hostname, int mainConnection){
 	char portnum[8];
 	int err;
 	err = write(mainConnection, buffer, 2);
-	if (err < 0) {
+	if(err < 0) {
 		perror("Write");
 		return -1;
 	}
 	err = read(mainConnection, buffer, 8);
-	if (err < 0) {
+	if(err < 0) {
 		perror("Read");
 		return -1;
 	}
@@ -96,6 +98,10 @@ int getDataConnection(char* hostname, int mainConnection){
 		}
 		portnum[index - 1] = '\0';
 	}
+	else if(buffer[0] == 'E'){
+		fprintf(stderr, "Error: %s\n", buffer);
+		return -1;
+	}
 	else {
 		fprintf(stderr, "Error: Sever sent unexpected response %s\n", buffer);
 		return -1;
@@ -103,6 +109,66 @@ int getDataConnection(char* hostname, int mainConnection){
 	int newSocketfd = getSocket(hostname, portnum);
 	printf("new port: %s\n",portnum);
 	return newSocketfd;	
+}
+
+int showFileContents(char* path, char* hostname, int mainConnection){
+	// Establish data connection
+	int dataConnection = getDataConnection(hostname, mainConnection);
+	// Send G command to get file
+	int err;
+	// Pipe returned contents from socket into more
+	// Wait for child to finish
+	return 0;
+}
+
+
+int changeServerDirectory(char* newPath, int mainConnection){
+	int err;
+	err = write(mainConnection, "C", 1);
+	if(err < 0) {
+		perror("Write");
+		return -1;
+	}
+	err = write(mainConnection, newPath, strlen(newPath));
+        if(err < 0) {
+                perror("Write");
+                return -1;
+        }
+	err = write(mainConnection, "\n", 1);
+	if(err < 0) {
+                perror("Write");
+                return -1;
+        }
+	char buffer[100];
+	err = read(mainConnection, buffer, 100);
+	if(err < 0) {
+		perror("Read");
+		return -1;
+	}
+	if(buffer[0] == 'A'){
+		printf("Successfully changed server directory.\n");
+		return 0;
+	}
+	else if(buffer[0] == 'E'){
+		fprintf(stderr, "Error: %s\n",buffer);
+		return -1;
+	}
+	else {
+		fprintf(stderr, "Error: Server returned unexpected response.\n");
+		return -1;
+	}
+	return 0;
+}
+
+
+int changeDirectory(char* newPath){
+	int err;
+	err = chdir(newPath);
+	if(err == -1) {
+		perror("chdir");
+		return -1;
+	}
+	return 0;
 }
 
 int serverList(char* hostname, int mainConnection){
