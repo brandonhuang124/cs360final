@@ -11,9 +11,10 @@
 #include <string.h>
 #include <unistd.h>
 
-
+int serverList(char*, int);
 int list();
-socketfd getDataConnection(char*, int);
+int getSocket(char*, char*);
+int getDataConnection(char*, int);
 
 int main(char argc, char ** argv){
 	if(argc < 3){
@@ -24,30 +25,13 @@ int main(char argc, char ** argv){
 	char * portnum = argv[1];
 	int socketfd;
 	struct addrinfo hints, *actualdata;
-	list();
-	return 0;
 	memset(&hints, 0, sizeof(hints));
 	int err;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_family = AF_INET;
-	err = getaddrinfo(hostname, portnum, &hints, &actualdata);
-	if(err != 0){
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
-		return -1;
-	}
-	socketfd = socket(actualdata->ai_family, actualdata->ai_socktype, 0);
-	if(socketfd == -1){
-		perror("Socket");
-		return -errno;
-	}
-	err = connect(socketfd, actualdata->ai_addr, actualdata->ai_addrlen);
-	if(err < 0){
-		perror("Connect");
-		return -errno;
-	}
+	socketfd = getSocket(hostname, portnum);
+	serverList(hostname, socketfd);
 	char buffer[100] = "Q\n";
 	printf("writing %s\n", buffer);
-	if (write(socketfd, buffer,100) < 0){
+	if (write(socketfd, buffer,2) < 0){
 		perror("Write: ");
 		return -errno;
 	}
@@ -61,12 +45,13 @@ int main(char argc, char ** argv){
 		printf("success\n");
 	}
 	else printf ("error\n");
+	list();
 	return 0;
 	
 }
 
 int getSocket(char* hostname, char* portnum){
-	int socketfd;
+	int socketfd, err;
 	struct addrinfo hints, *actualdata;
         memset(&hints, 0, sizeof(hints));
         hints.ai_socktype = SOCK_STREAM;
@@ -93,7 +78,7 @@ int getDataConnection(char* hostname, int mainConnection){
 	char buffer[8] = "D\n";
 	char portnum[8];
 	int err;
-	err = write(mainConnection, buffer, 8);
+	err = write(mainConnection, buffer, 2);
 	if (err < 0) {
 		perror("Write");
 		return -1;
@@ -103,7 +88,7 @@ int getDataConnection(char* hostname, int mainConnection){
 		perror("Read");
 		return -1;
 	}
-	if(buffer[0] == 'D'){
+	if(buffer[0] == 'A'){
 		int index = 1;
 		while(buffer[index] != '\n' && index < 8){
 			portnum[index - 1] = buffer[index];
@@ -112,20 +97,60 @@ int getDataConnection(char* hostname, int mainConnection){
 		portnum[index - 1] = '\0';
 	}
 	else {
+		fprintf(stderr, "Error: Sever sent unexpected response %s\n", buffer);
 		return -1;
 	}
-	int newSocketfd;
-	struct addrinfo hints, *actualdata;
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_family = AF_INET;
-	err = getaddrinfo(hostname, portnum, &hints, &actualdata);
-	if(err != 0){
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
-		return -2;
+	int newSocketfd = getSocket(hostname, portnum);
+	printf("new port: %s\n",portnum);
+	return newSocketfd;	
+}
+
+int serverList(char* hostname, int mainConnection){
+	int dataConnection = getDataConnection(hostname, mainConnection);
+	int err;
+	char buffer[100];
+	err = write(mainConnection, "L\n", 2);
+	printf("L write sent %d bytes\n",err);
+	if (err < 0) {
+		perror("Write");
+		return -1;
 	}
-	newSocketfd = socket(actualdata->
-	
+	err = read(mainConnection, buffer, 100);
+	if (err < 0) {
+		perror("Read");
+		return -1;
+	}
+	if(buffer[0] == 'E'){
+		fprintf(stderr, "Error: Server encountered an error\n");
+		return -1;
+	}
+	if(buffer[0] == 'A'){
+		// success
+		pid_t child = fork();
+		if(child == -1){
+			perror("Fork");
+			return -1;
+		}
+		if(!child){ // Child process
+			dup2(dataConnection,0);
+                        execlp("more","more","-5", (char *) NULL);
+                        perror("execlp");
+                        return -1;
+		}
+		else { // Parent
+			err = wait(NULL);
+			if(err == -1){
+				perror("Wait");
+				return -1;
+			}
+			return 0;
+		}
+	}
+	else {
+		fprintf(stderr, "Error: Server sent invalid response\n");
+		return -1;
+	}
+	return 0;
 }
 
 int list(){
@@ -169,7 +194,7 @@ int list(){
 			char* args[2];
 			args[0] = "-d";
 			args[1] = "-1";
-			execlp("more", "more", "-f", (char *) NULL);
+			execlp("more", "more", "-5", (char *) NULL);
 			perror("execvp child");
 			return -1;
 
@@ -186,14 +211,13 @@ int list(){
                                 perror("dup2");
                                 return errno;
                         }
-			execlp("ls", "ls", "-l", (char *) NULL);
+			execlp("ls", "ls", "-a", "-l", (char *) NULL);
                         perror("execvp child");
                         return -1;
 
 		}
 	}
 	err = wait(NULL);
-	printf("done\n");
 	if(err == -1){
 		perror("Waitpid");
 		return -1;
