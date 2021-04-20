@@ -1,16 +1,20 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <netdb.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+int putFile(char* path, char* hostname, int socketfd);
+int getFile(char* path, char* hostname, int socketfd);
 int quit(int);
 int serverList(char*, int);
 int list();
@@ -34,8 +38,8 @@ int main(char argc, char ** argv) {
 
 	memset(&hints, 0, sizeof(hints));
 	socketfd = getSocket(hostname, portnum);
-
-	showFileContents("mftp.c", "localhost", socketfd);
+	getFile("mftp.c", hostname, socketfd);
+	//showFileContents("mftp.c", "localhost", socketfd);
 	//changeServerDirectory("..", socketfd);
 	//serverList(hostname, socketfd);
 	quit(socketfd);	
@@ -112,6 +116,103 @@ int getDataConnection(char* hostname, int mainConnection) {
 	int newSocketfd = getSocket(hostname, portnum);
 	printf("new port: %s\n",portnum);
 	return newSocketfd;	
+}
+
+int putFile(char* path, char* hostname, int mainConnection){
+
+	return 0;
+}
+
+int getFile(char* path, char* hostname, int mainConnection){
+	//get file name
+	int err;
+	int index = 0;
+	char name[256] = "";
+	char buffer[100];
+	for(int i = 0; (i < strlen(path)) && (index < 256); i++){
+		if(path[i] == '/') {
+			index = 0;
+		}
+		else {
+			name[index] = path[i];
+			index ++;
+		}
+	}
+	name[index] = '\0';
+	//check if file exists already
+	int fd = open(name, O_WRONLY | O_CREAT | O_EXCL, S_IRWXU);
+	if(fd == -1) {
+		if(errno == EEXIST) {
+			fprintf(stderr, "File exists\n");
+			return 0;
+		}
+		else {
+			perror("open failed");
+			return -1;
+		}
+	}	
+	int dataConnection = getDataConnection(hostname, mainConnection);
+	//open data connection
+	//write contents to file
+	//cleanup
+	
+	err = write(mainConnection, "G", 1);
+        if(err < 0) {
+                perror("write");
+		close(fd);
+                return -1;
+        }
+
+        err = write(mainConnection, path, strlen(path));
+        if(err < 0) {
+                perror("write");
+		close(fd);
+                return -1;
+        }
+
+        err = write(mainConnection, "\n", 1);
+        if(err < 0) {
+                perror("write");
+		close(fd);
+                return -1;
+        }
+	err = read(mainConnection, buffer, 100);
+        if(err < 0) {
+                perror("read");
+		close(fd);
+                return -1;
+        }
+
+        if(buffer[0] == 'A') {
+                printf("Server accepted command\n");
+        }
+        else if(buffer[0] == 'E') {
+                fprintf(stderr, "Server Error: %s\n", buffer);
+		close(fd);
+                return -1;
+        }
+	else {
+		fprintf(stderr, "Servor Error: Server sent unexpected response\n");
+		close(fd);
+		return -1;
+	}
+		
+	int numRead;
+	while( (numRead = read(dataConnection, buffer, 100)) > 0) {
+		err = write(fd, buffer, numRead);
+		if(err < 0) {
+			perror("write");
+			close(fd);
+			return -1;
+		}
+	}
+	if(numRead < 0) {
+		perror("read");
+		close(fd);
+		return -1;
+	}
+	close(fd);
+	return 0;
 }
 
 int quit(int mainConnection) {
