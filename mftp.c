@@ -35,10 +35,91 @@ int main(char argc, char ** argv) {
 	char * portnum = argv[1];
 	int socketfd;
 	struct addrinfo hints, *actualdata;
+	char* command = NULL;
+	char* argument = NULL;
+	const char delimiter[2] = " ";
+	char buffer[512];
 
 	memset(&hints, 0, sizeof(hints));
 	socketfd = getSocket(hostname, portnum);
-	getFile("mftp.c", hostname, socketfd);
+	
+	printf("mftp>");
+	while(fgets(buffer, 512, stdin) != NULL) {	
+		buffer[strlen(buffer) - 1] = '\0';
+		command = strtok(buffer, delimiter);
+		argument = strtok(NULL, delimiter);
+		if(command == NULL) {
+			printf("mftp>");
+			continue;
+		}
+
+		if(!strcmp(command, "exit")) {
+			// Quit command
+			quit(socketfd);
+			return 0;
+		}
+		else if(!strcmp(command, "ls")) {
+			list();
+			// ls command
+		}
+		else if(!strcmp(command, "rls")) {
+			// rls command
+			serverList(hostname, socketfd);
+		}
+		else if(!strcmp(command, "cd")) {
+			if(argument == NULL) {
+				printf("Command error: expecting a parameter\n");
+				printf("mftp>");
+				continue;
+			}
+			changeDirectory(argument);
+			// cd command
+		}
+		else if(!strcmp(command, "rcd")) {
+                        if(argument == NULL) {
+                                printf("Command error: expecting a parameter\n");
+				printf("mftp>");
+                                continue;
+                        }
+                        // rcd command
+			changeServerDirectory(argument, socketfd);
+                }
+		else if(!strcmp(command, "get")) {
+                        if(argument == NULL) {
+                                printf("Command error: expecting a parameter\n");
+				printf("mftp>");
+                                continue;
+                        }
+                        // get command
+			getFile(argument, hostname, socketfd);
+                }
+		else if(!strcmp(command, "put")) {
+			if(argument == NULL) {
+				printf("Command error: expecting a parameter\n");
+				printf("mftp>");
+				continue;
+			}
+			// put command
+			putFile(argument, hostname, socketfd);
+		}
+		else if(!strcmp(command, "show")) {
+                        if(argument == NULL) {
+                                printf("Command error: expecting a parameter\n");
+				printf("mftp>");
+                                continue;
+                        }
+                        // show command
+			showFileContents(argument, hostname, socketfd);
+                }
+		else {
+			printf("Command '%s' is unknown - ignored\n",command);
+			printf("mftp>");
+		}
+		printf("mftp>");
+	}
+
+			
+	//getFile("testfile.txt", hostname, socketfd);
 	//showFileContents("mftp.c", "localhost", socketfd);
 	//changeServerDirectory("..", socketfd);
 	//serverList(hostname, socketfd);
@@ -119,7 +200,92 @@ int getDataConnection(char* hostname, int mainConnection) {
 }
 
 int putFile(char* path, char* hostname, int mainConnection){
-
+	// Open file
+	int err;
+	char name[256] = "";
+	char buffer[512];
+	int fd = open(path, O_RDONLY, 0);
+	if (fd == -1) {
+		perror("open failed");
+		return -1;
+	}
+	// Open data connection
+	int dataConnection = getDataConnection(hostname, mainConnection);
+	if(dataConnection == -1){
+		close(fd);
+		return -1;
+	}
+	// Get file name
+	int index = 0;
+	for(int i = 0; (i < strlen(path)) && (index < 256); i++) {
+		if(path[i] == '/') {
+			index = 0;
+		}
+		else {
+			name[index] = path[i];
+			index ++;
+		}
+	}
+	name[index] = '\0';
+	// Send P<pathname>
+	err = write(mainConnection, "P", 1);
+	if(err < 0) {
+		perror("write");
+		close(fd);
+		return -1;
+	}
+	err = write(mainConnection, name, strlen(name));
+	if(err < 0) {
+		perror("write");
+		close(fd);
+		return -1;
+	}
+	err = write(mainConnection, "\n", 1);
+	if(err < 0) {
+		perror("write");
+		close(fd);
+		return -1;
+	}
+	// Check response
+	err = read(mainConnection, buffer, 100);
+	if(err < 0) {
+		perror("read");
+		close(fd);
+		return -1;
+	}
+	if(buffer[0] == 'A') {
+		printf("Server accepted command\n");
+	}
+	else if(buffer[0] == 'E') {
+		fprintf(stderr, "Server Error:%s\n", buffer);
+		close(fd);
+		return -1;
+	}
+	else {
+		fprintf(stderr, "Server Error: Server sent unexpected response");
+		close(fd);
+		return -1;
+	}
+	// Send data
+	int numRead;
+	while( (numRead = read(fd, buffer, 511)) > 0) {
+		printf("numread= %d\n",numRead);
+		err = write(dataConnection, buffer, numRead);
+		if(err < 0) {
+			perror("write");
+			close(fd);
+			return -1;
+		}
+	}
+	printf("out of loop\n");
+	if(numRead < 0 ){
+		perror("Read");
+		close(dataConnection);
+		close(fd);
+		return -1;
+	}
+	close(dataConnection);
+	close(fd);
 	return 0;
 }
 
