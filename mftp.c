@@ -23,6 +23,10 @@ int changeDirectory(char*);
 int getSocket(char*, char*);
 int getDataConnection(char*, int);
 int showFileContents(char* path, char* hostname, int socketfd);
+int errorPrint(char*);
+int readFromServer(int, char*);
+int writeToServer(int, char*);
+
 
 int main(char argc, char ** argv) {
 	if(argc < 3) {
@@ -130,10 +134,51 @@ int main(char argc, char ** argv) {
 	
 }
 
+int writeToServer(int fd, char* message) {
+	err = write(fd, message, strlen(message));
+	if(err < 0) {
+		perror("write to server");
+		return -1;
+	}
+	return 0;
+}
+
+int readFromServer(int fd, char* storage, int storageSize) {
+	char buffer[32] = "";
+	int err;
+	int index = 0;
+	while(buffer[0] != '\n' && index < storageSize) {
+		err = read(fd, buffer, 1);
+		if(err < 0) {
+			perror("read from server");
+			return -1;
+		}
+		storage[index] = buffer[0];
+		index++;
+	}
+	return 0;
+}
+
+int errorPrint(char* error) {
+	if(error[0] != 'E') {
+		return -1;
+	}
+	char message[512];
+	int index = 0;
+	for(int i = 1; i < strlen(error); i++) {
+		message[i-1] = error[i];
+		index++;
+	}
+	message[index] = '\0';
+	fprintf("Error recieved from server: %s", message);
+	return 0;
+}
+
 int getSocket(char* hostname, char* portnum) {
 	int socketfd, err;
 	struct addrinfo hints, *actualdata;
 
+	printf("Attempting connecton on port: %s\n", portnum);
         memset(&hints, 0, sizeof(hints));
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_family = AF_INET;
@@ -160,33 +205,22 @@ int getSocket(char* hostname, char* portnum) {
 }
 
 int getDataConnection(char* hostname, int mainConnection) {
-	char buffer[8] = "D\n";
 	char portnum[8];
 	int err;
-
-	err = write(mainConnection, buffer, 2);
-	if(err < 0) {
-		perror("Write");
-		return -1;
-	}
-
-	err = read(mainConnection, buffer, 8);
-	if(err < 0) {
-		perror("Read");
-		return -1;
-	}
-
-	if(buffer[0] == 'A') {
+	writeToServer(mainConnection, "D\n");
+	char response[512];
+	int index = 0;
+	readFromServer(mainConnection,response,512);
+	if(response[0] == 'A') {
 		int index = 1;
-
-		while(buffer[index] != '\n' && index < 8) {
-			portnum[index - 1] = buffer[index];
+		while(response[index] != '\n' && index < strlen(response)) {
+			portnum[index - 1] = response[index];
 			index++;
 		}
 		portnum[index - 1] = '\0';
 	}
-	else if(buffer[0] == 'E') {
-		fprintf(stderr, "Error: %s\n", buffer);
+	else if(response[0] == 'E') {
+		errorPrint(response);
 		return -1;
 	}
 	else {
@@ -257,7 +291,7 @@ int putFile(char* path, char* hostname, int mainConnection){
 		printf("Server accepted command\n");
 	}
 	else if(buffer[0] == 'E') {
-		fprintf(stderr, "Server Error:%s\n", buffer);
+		errorPrint(buffer);
 		close(fd);
 		return -1;
 	}
@@ -277,7 +311,6 @@ int putFile(char* path, char* hostname, int mainConnection){
 			return -1;
 		}
 	}
-	printf("out of loop\n");
 	if(numRead < 0 ){
 		perror("Read");
 		close(dataConnection);
@@ -353,7 +386,7 @@ int getFile(char* path, char* hostname, int mainConnection){
                 printf("Server accepted command\n");
         }
         else if(buffer[0] == 'E') {
-                fprintf(stderr, "Server Error: %s\n", buffer);
+		errorPrint(buffer);
 		close(fd);
                 return -1;
         }
@@ -402,7 +435,7 @@ int quit(int mainConnection) {
 		return 0;
 	}
 	else if(buffer[0] == 'E') {
-		fprintf(stderr, "Server error: %s\n",buffer);
+		errorPrint(buffer);
 		return -1;
 	}
 	else {
@@ -448,7 +481,7 @@ int showFileContents(char* path, char* hostname, int mainConnection) {
 		printf("Server accepted command\n");	
 	}
 	else if(buffer[0] == 'E') {
-		fprintf(stderr, "Server Error: %s\n", buffer);
+		errorPrint(buffer);
 		return -1;
 	}
 	else {
@@ -513,7 +546,7 @@ int changeServerDirectory(char* newPath, int mainConnection) {
 		return 0;
 	}
 	else if(buffer[0] == 'E') {
-		fprintf(stderr, "Error: %s\n",buffer);
+		errorPrint(buffer);
 		return -1;
 	}
 	else {
@@ -554,7 +587,7 @@ int serverList(char* hostname, int mainConnection) {
 	}
 
 	if(buffer[0] == 'E') {
-		fprintf(stderr, "Error: Server encountered an error\n");
+		errorPrint(buffer);
 		return -1;
 	}
 	else if(buffer[0] == 'A') {

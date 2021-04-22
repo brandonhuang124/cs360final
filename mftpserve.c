@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 int serverGet(int dataConnection, int mainConnection, char* path);
-int serverPut(int, char*);
+int serverPut(int dataConnection, int mainConnection, char* path);
 int serverls(int);
 int serverDataConnection(int);
 int serverChangeDirectory(char*, int);
@@ -24,7 +24,7 @@ int server(int);
 int serverQuit(int);
 
 int main(char argc, char** argv){	
-	int err, listenfd;
+	int err, listenfd, wstatus;
 	listenfd = socket(AF_INET, SOCK_STREAM, 0);
 	err = setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
 	if(err < 0) { 
@@ -82,6 +82,8 @@ int main(char argc, char** argv){
 			return 0;
 		}
 		// Maybe wait for childs after a threshhold?
+		waitpid(0, &wstatus, WNOHANG);
+
 	}
 	return 0;
 }
@@ -104,19 +106,19 @@ int server(int connectfd) {
 				break;
 			}
 		}
-		command[index] = '\0';
-		if(err = 0) {
+		if(err == 0) {
 			printf("EOF detected\n");
+			return -1;
+		}
+		else if(err < 0) {
+			perror("read");
 			return -1;
 		}
 		if(!strcmp(command,"")) {
 			continue;	
 		}
+		command[index] = '\0';
 		printf("command sent: %s",command);
-		if(err < 0) {
-			perror("read");
-			return -1;
-		}
 		
 		// Check for types of commands
 		if(command[0] == 'Q') {
@@ -149,7 +151,14 @@ int server(int connectfd) {
 			hasDataConnection = 0;
 		}
 		else if(command[0] == 'P') {
-
+			if(!hasDataConnection) {
+				write(connectfd, "ENo prior data connection established\n", 38);
+				continue;
+			}
+			getPathname(command, pathname);
+			err = serverPut(dataConnection, connectfd, pathname);
+			close(dataConnection);
+			hasDataConnection = 0;
 		}
 		else if(command[0] == 'L') {
 			// Check if data connection is available
@@ -177,8 +186,36 @@ int server(int connectfd) {
 	return 0;
 }
 
-int serverPut(int dataConnection, char* pathname) {
-	
+int serverPut(int dataConnection, int mainConnection, char* pathname) {
+	int err, numRead;
+	char buffer[512];
+	int fd = open(pathname, O_WRONLY | O_CREAT | O_EXCL, S_IRWXU);
+	if(fd == -1) {
+		write(mainConnection, "E", 1);
+		write(mainConnection, strerror(errno), strlen(strerror(errno)));
+		write(mainConnection, "\n", 1);
+		return -1;
+	}
+	err = write(mainConnection, "A\n", 2);
+	if(err < 0) {
+		perror("write");
+		return -1;
+	}
+	while( (numRead = read(dataConnection, buffer, 511)) > 0) {
+		err = write(fd, buffer, numRead);
+		if(err < 0) {
+			perror("write");
+			close(fd);
+			return -1;
+		}
+	}
+	if(numRead < 0) {
+		perror("read");
+		close(fd);
+		return -1;
+	}
+
+	close(fd);
 	return 0;
 }
 
@@ -269,6 +306,7 @@ int serverDataConnection(int mainConnection) {
 	}
 	port = ntohs(info.sin_port);
 	sprintf(portString, "%d", port);
+	printf("Sending <A%s\n>",portString);
 	err = write(mainConnection, "A", 1);
 	err = write(mainConnection, portString, strlen(portString));
 	err = write(mainConnection, "\n", 1);
