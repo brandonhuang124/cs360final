@@ -1,32 +1,26 @@
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <netinet/in.h>
-#include <netdb.h>
+#include "mftp.h"
 
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-int putFile(char* path, char* hostname, int socketfd);
-int getFile(char* path, char* hostname, int socketfd);
-int quit(int);
-int serverList(char*, int);
-int list();
-int changeServerDirectory(char*, int);
-int changeDirectory(char*);
-int getSocket(char*, char*);
-int getDataConnection(char*, int);
-int showFileContents(char* path, char* hostname, int socketfd);
-int errorPrint(char*);
-int readFromServer(int, char*);
-int writeToServer(int, char*);
-
+/******************************************
+ *Written by: Brandon Huang
+ *For: cs360 final project
+ *Last modified: 4/22/21
+ *
+ * Descirption: A program that provides a client user interface for the purposes
+ * of interacting with the mftpserve server. 
+ * Usage: mftp <port number> <address>
+ * Commands:
+ * 	quit: quits out of the client
+ * 	cd <path>: changes clients working directory
+ * 	rcd <path>: changes the servers working directory
+ * 	ls: prints the clients working directory
+ * 	rls: prints the servers working directory
+ * 	show <path>: Prints the contents of a file of the given path from the
+ * 	server's directory
+ * 	get <path>: transfers a file from the given path from the server's
+ * 	directory into the working directory of the client.
+ * 	put <path>: transfers a file from the given path from the client's
+ * 	directory into the working directory of the server.
+******************************************/
 
 int main(char argc, char ** argv) {
 	if(argc < 3) {
@@ -38,17 +32,20 @@ int main(char argc, char ** argv) {
 	char * hostname = argv[2];
 	char * portnum = argv[1];
 	int socketfd;
-	struct addrinfo hints, *actualdata;
 	char* command = NULL;
 	char* argument = NULL;
 	const char delimiter[2] = " ";
 	char buffer[512];
 
-	memset(&hints, 0, sizeof(hints));
+	// Attempt a connection
 	socketfd = getSocket(hostname, portnum);
-	
+	if(socketfd < 0) {
+		return -1;
+	}	
 	printf("mftp>");
-	while(fgets(buffer, 512, stdin) != NULL) {	
+	// Read from stdin, one line at a time
+	while(fgets(buffer, 512, stdin) != NULL) { 
+		// Remove the newline at the end and parse the input	
 		buffer[strlen(buffer) - 1] = '\0';
 		command = strtok(buffer, delimiter);
 		argument = strtok(NULL, delimiter);
@@ -63,78 +60,74 @@ int main(char argc, char ** argv) {
 			return 0;
 		}
 		else if(!strcmp(command, "ls")) {
-			list();
 			// ls command
+			list();
 		}
 		else if(!strcmp(command, "rls")) {
 			// rls command
 			serverList(hostname, socketfd);
 		}
 		else if(!strcmp(command, "cd")) {
+			// cd command
 			if(argument == NULL) {
 				printf("Command error: expecting a parameter\n");
 				printf("mftp>");
 				continue;
 			}
 			changeDirectory(argument);
-			// cd command
 		}
 		else if(!strcmp(command, "rcd")) {
+			//rcd command
                         if(argument == NULL) {
                                 printf("Command error: expecting a parameter\n");
 				printf("mftp>");
                                 continue;
                         }
-                        // rcd command
 			changeServerDirectory(argument, socketfd);
                 }
 		else if(!strcmp(command, "get")) {
+			// get command
                         if(argument == NULL) {
                                 printf("Command error: expecting a parameter\n");
 				printf("mftp>");
                                 continue;
                         }
-                        // get command
 			getFile(argument, hostname, socketfd);
                 }
 		else if(!strcmp(command, "put")) {
+			// put command
 			if(argument == NULL) {
 				printf("Command error: expecting a parameter\n");
 				printf("mftp>");
 				continue;
 			}
-			// put command
 			putFile(argument, hostname, socketfd);
 		}
 		else if(!strcmp(command, "show")) {
+			// show command
                         if(argument == NULL) {
                                 printf("Command error: expecting a parameter\n");
 				printf("mftp>");
                                 continue;
                         }
-                        // show command
 			showFileContents(argument, hostname, socketfd);
                 }
 		else {
 			printf("Command '%s' is unknown - ignored\n",command);
-			printf("mftp>");
 		}
 		printf("mftp>");
 	}
-
-			
-	//getFile("testfile.txt", hostname, socketfd);
-	//showFileContents("mftp.c", "localhost", socketfd);
-	//changeServerDirectory("..", socketfd);
-	//serverList(hostname, socketfd);
+	printf("EOF detected\n");
 	quit(socketfd);	
-	//changeDirectory("..");
-	//list();
 	return 0;
 	
 }
 
+// This function simply takes a given string, and prints it to a given socket with error checking.
+// Returns 0 on success and -1 on error.
 int writeToServer(int fd, char* message) {
+	int err;
+	// printf("**Writing to server: %s", message);
 	err = write(fd, message, strlen(message));
 	if(err < 0) {
 		perror("write to server");
@@ -143,10 +136,13 @@ int writeToServer(int fd, char* message) {
 	return 0;
 }
 
+// This function reads from a socket until finding a \n character and stores what it read in the given string.
+// Also takes the string size to prevent buffer overflow. Returns a 0 on success and -1 on failure.
 int readFromServer(int fd, char* storage, int storageSize) {
 	char buffer[32] = "";
 	int err;
 	int index = 0;
+	// Keep reading as long as the last char read wasn't a \n
 	while(buffer[0] != '\n' && index < storageSize) {
 		err = read(fd, buffer, 1);
 		if(err < 0) {
@@ -156,9 +152,13 @@ int readFromServer(int fd, char* storage, int storageSize) {
 		storage[index] = buffer[0];
 		index++;
 	}
+	storage[index] = '\0';
+	// printf("**Read from server: %s", storage);
 	return 0;
 }
 
+// This function will take an error recieved from the server and quickly parse and print it.
+// Returns 0 on success and -1 if it was sent not an error message from the server
 int errorPrint(char* error) {
 	if(error[0] != 'E') {
 		return -1;
@@ -170,46 +170,55 @@ int errorPrint(char* error) {
 		index++;
 	}
 	message[index] = '\0';
-	fprintf("Error recieved from server: %s", message);
+	fprintf(stderr, "Error recieved from server: %s", message);
 	return 0;
 }
 
+// This function attempts to connect a socket on the given hostname and portnumber.
+// Returns the descriptor for the new socket, and a negative value upon an error.
 int getSocket(char* hostname, char* portnum) {
 	int socketfd, err;
 	struct addrinfo hints, *actualdata;
 
-	printf("Attempting connecton on port: %s\n", portnum);
+	// printf("Attempting connecton on port: %s\n", portnum);
         memset(&hints, 0, sizeof(hints));
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_family = AF_INET;
-
+	// Get info
         err = getaddrinfo(hostname, portnum, &hints, &actualdata);
         if(err != 0) {
                 fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
                 return -2;
         }
-
+	// Get socket
         socketfd = socket(actualdata->ai_family, actualdata->ai_socktype, 0);
 	if(socketfd == -1) {
+		freeaddrinfo(actualdata);
                 perror("Socket");
-                return -errno;
+                return -1;
         }
-
+	// Connect socket
         err = connect(socketfd, actualdata->ai_addr, actualdata->ai_addrlen);
         if(err < 0) {
+		freeaddrinfo(actualdata);
                 perror("Connect");
-                return -errno;
+                return -1;
         }
-
+	// Free allocated memory on info
+	freeaddrinfo(actualdata);
 	return socketfd;
 }
 
+// This function attempts to set up a data connectoin between the client and the server.
+// Returns the descriptor for the ne connection, or a negative number on an error.
 int getDataConnection(char* hostname, int mainConnection) {
 	char portnum[8];
 	int err;
+	// Ask the server for a connection
 	writeToServer(mainConnection, "D\n");
 	char response[512];
 	int index = 0;
+	// Read the response and parse the portnumber
 	readFromServer(mainConnection,response,512);
 	if(response[0] == 'A') {
 		int index = 1;
@@ -224,20 +233,25 @@ int getDataConnection(char* hostname, int mainConnection) {
 		return -1;
 	}
 	else {
-		fprintf(stderr, "Error: Sever sent unexpected response %s\n", buffer);
+		errorPrint(response);
 		return -1;
 	}
-
+	// Get a socket using the info
 	int newSocketfd = getSocket(hostname, portnum);
-	printf("new port: %s\n",portnum);
+	// printf("new port: %s\n",portnum);
 	return newSocketfd;	
 }
 
+// This function containst the put command. It communicates with the server accross the main connection
+// and attempts to transfer a file over the data connection from the given pathname.
+// Returns 0 on success and -1 on failure.
 int putFile(char* path, char* hostname, int mainConnection){
 	// Open file
 	int err;
 	char name[256] = "";
 	char buffer[512];
+	char message[512];
+	char response[512];
 	int fd = open(path, O_RDONLY, 0);
 	if (fd == -1) {
 		perror("open failed");
@@ -261,37 +275,20 @@ int putFile(char* path, char* hostname, int mainConnection){
 		}
 	}
 	name[index] = '\0';
+
 	// Send P<pathname>
-	err = write(mainConnection, "P", 1);
-	if(err < 0) {
-		perror("write");
-		close(fd);
-		return -1;
-	}
-	err = write(mainConnection, name, strlen(name));
-	if(err < 0) {
-		perror("write");
-		close(fd);
-		return -1;
-	}
-	err = write(mainConnection, "\n", 1);
-	if(err < 0) {
-		perror("write");
-		close(fd);
-		return -1;
-	}
+	strcpy(message,"P");
+	strcat(message, name);
+	strcat(message, "\n");
+	writeToServer(mainConnection, message);
+
 	// Check response
-	err = read(mainConnection, buffer, 100);
-	if(err < 0) {
-		perror("read");
-		close(fd);
-		return -1;
+	readFromServer(mainConnection, response, 512);
+	if(response[0] == 'A') {
+		// printf("Server acknowledged put\n");
 	}
-	if(buffer[0] == 'A') {
-		printf("Server accepted command\n");
-	}
-	else if(buffer[0] == 'E') {
-		errorPrint(buffer);
+	else if(response[0] == 'E') {
+		errorPrint(response);
 		close(fd);
 		return -1;
 	}
@@ -300,10 +297,10 @@ int putFile(char* path, char* hostname, int mainConnection){
 		close(fd);
 		return -1;
 	}
-	// Send data
+	// Send File accross data connection
 	int numRead;
 	while( (numRead = read(fd, buffer, 511)) > 0) {
-		printf("numread= %d\n",numRead);
+		// printf("numread= %d\n",numRead);
 		err = write(dataConnection, buffer, numRead);
 		if(err < 0) {
 			perror("write");
@@ -322,12 +319,16 @@ int putFile(char* path, char* hostname, int mainConnection){
 	return 0;
 }
 
+// This function represents the get command. It communicates with the server accross the main connection
+// and attempts to transfer a file from the server. Returns 0 on success and -1 on an error.
 int getFile(char* path, char* hostname, int mainConnection){
-	//get file name
 	int err;
 	int index = 0;
 	char name[256] = "";
-	char buffer[100];
+	char buffer[512];
+	char message[512];
+	char response[512];
+	// Get filename from the path
 	for(int i = 0; (i < strlen(path)) && (index < 256); i++){
 		if(path[i] == '/') {
 			index = 0;
@@ -338,7 +339,7 @@ int getFile(char* path, char* hostname, int mainConnection){
 		}
 	}
 	name[index] = '\0';
-	//check if file exists already
+	// Open the file, checking if it already exists
 	int fd = open(name, O_WRONLY | O_CREAT | O_EXCL, S_IRWXU);
 	if(fd == -1) {
 		if(errno == EEXIST) {
@@ -349,53 +350,34 @@ int getFile(char* path, char* hostname, int mainConnection){
 			perror("open failed");
 			return -1;
 		}
-	}	
+	}
+	// open the data connection	
 	int dataConnection = getDataConnection(hostname, mainConnection);
-	//open data connection
-	//write contents to file
-	//cleanup
-	
-	err = write(mainConnection, "G", 1);
-        if(err < 0) {
-                perror("write");
-		close(fd);
-                return -1;
-        }
-
-        err = write(mainConnection, path, strlen(path));
-        if(err < 0) {
-                perror("write");
-		close(fd);
-                return -1;
-        }
-
-        err = write(mainConnection, "\n", 1);
-        if(err < 0) {
-                perror("write");
-		close(fd);
-                return -1;
-        }
-	err = read(mainConnection, buffer, 100);
-        if(err < 0) {
-                perror("read");
-		close(fd);
-                return -1;
-        }
-
-        if(buffer[0] == 'A') {
+	// Make the requiest to the server
+	strcpy(message, "G");
+	strcat(message, path);
+	strcat(message, "\n");
+	writeToServer(mainConnection, message);
+	// Get the response
+	readFromServer(mainConnection, response, 512);
+        
+	if(response[0] == 'A') {
                 printf("Server accepted command\n");
         }
-        else if(buffer[0] == 'E') {
-		errorPrint(buffer);
+        else if(response[0] == 'E') {
+		remove(path);
+		errorPrint(response);
 		close(fd);
                 return -1;
         }
 	else {
 		fprintf(stderr, "Servor Error: Server sent unexpected response\n");
+		remove(path);
 		close(fd);
 		return -1;
 	}
-		
+	
+	// Transfer the file	
 	int numRead;
 	while( (numRead = read(dataConnection, buffer, 100)) > 0) {
 		err = write(fd, buffer, numRead);
@@ -414,74 +396,55 @@ int getFile(char* path, char* hostname, int mainConnection){
 	return 0;
 }
 
+// This function represnets the quit command. It communicates with the server it is exiting
+// Returns a 0 on success and -1 on an error.
 int quit(int mainConnection) {
 	int err;
-	char buffer[100];
-
-	err = write(mainConnection, "Q\n", 2);
-	if(err < 0) {
-		perror("write");
-		return -1;
-	}
+	char response[512];
 	
-	err = read(mainConnection, buffer, 10);
-	if(err < 0) {
-		perror("read");
-		return -1;
-	}
+	// Send the request to the server and get a response
+	writeToServer(mainConnection, "Q\n");
+	readFromServer(mainConnection, response, 512);
 
-	if(buffer[0] == 'A') {
+	if(response[0] == 'A') {
 		printf("Successfully quit from server\n");
+		close(mainConnection);
 		return 0;
 	}
-	else if(buffer[0] == 'E') {
-		errorPrint(buffer);
+	else if(response[0] == 'E') {
+		errorPrint(response);
 		return -1;
 	}
 	else {
 		fprintf(stderr, "Server error: Server sent unexpected response\n");
 		return -1;
 	}
-
+	close(mainConnection);
 	return 0;
 }
 
+// This function represents the show command. It communicates with the server across the main connection
+// and attempts to get the files contents from the given path and print it to the client.
+// Returns 0 on success and -1 on failure
 int showFileContents(char* path, char* hostname, int mainConnection) {
 	// Establish data connection
+	int err;
+	char message[512];
+	char response[512];
 	int dataConnection = getDataConnection(hostname, mainConnection);
 	// Send G command to get file
-	int err;
+	strcpy(message, "G");
+	strcat(message, path);
+	strcat(message, "\n");
+	writeToServer(mainConnection, message);
+	// Get response
+	readFromServer(mainConnection, response, 512);
 
-	err = write(mainConnection, "G", 1);
-	if(err < 0) {
-		perror("write");
-		return -1;
-	}
-
-	err = write(mainConnection, path, strlen(path));
-	if(err < 0) {
-		perror("write");
-		return -1;
-	}
-
-	err = write(mainConnection, "\n", 1);
-	if(err < 0) {
-		perror("write");
-		return -1;
-	}
-
-	char buffer[100];
-	err = read(mainConnection, buffer, 100);
-	if(err < 0) {
-		perror("read");
-		return -1;
-	}
-
-	if(buffer[0] == 'A') {
+	if(response[0] == 'A') {
 		printf("Server accepted command\n");	
 	}
-	else if(buffer[0] == 'E') {
-		errorPrint(buffer);
+	else if(response[0] == 'E') {
+		errorPrint(response);
 		return -1;
 	}
 	else {
@@ -512,41 +475,28 @@ int showFileContents(char* path, char* hostname, int mainConnection) {
 	return 0;
 }
 
-
+// This function represents the rcd command. It communicates across the main connectoin to tell the server
+// where to cd into. Returns 0 on success and -1 on an error
 int changeServerDirectory(char* newPath, int mainConnection) {
 	int err;
-	char buffer[100];
+	char message[512];
+	char response[512];
+	
+	// Send command to the server
+	strcpy(message, "C");
+	strcat(message, newPath);
+	strcat(message, "\n");
+	writeToServer(mainConnection, message);
 
-	err = write(mainConnection, "C", 1);
-	if(err < 0) {
-		perror("Write");
-		return -1;
-	}
+	// Get response
+	readFromServer(mainConnection, response, 512);
 
-	err = write(mainConnection, newPath, strlen(newPath));
-        if(err < 0) {
-                perror("Write");
-                return -1;
-        }
-
-	err = write(mainConnection, "\n", 1);
-	if(err < 0) {
-                perror("Write");
-                return -1;
-        }
-
-	err = read(mainConnection, buffer, 100);
-	if(err < 0) {
-		perror("Read");
-		return -1;
-	}
-
-	if(buffer[0] == 'A') {
-		printf("Successfully changed server directory.\n");
+	if(response[0] == 'A') {
+		// printf("Successfully changed server directory.\n");
 		return 0;
 	}
-	else if(buffer[0] == 'E') {
-		errorPrint(buffer);
+	else if(response[0] == 'E') {
+		errorPrint(response);
 		return -1;
 	}
 	else {
@@ -557,7 +507,8 @@ int changeServerDirectory(char* newPath, int mainConnection) {
 	return 0;
 }
 
-
+// This function represents the cd command. It calls chdir with the given path and includes error checking.
+// Returns 0 on success and =1 on failures
 int changeDirectory(char* newPath) {
 	int err;
 
@@ -569,29 +520,24 @@ int changeDirectory(char* newPath) {
 	return 0;
 }
 
+// This function represents the rls command. It communicates with the server across the main connection
+// and gets the ls info from the data connection.
+// Returns 0 on success and -1 on error.
 int serverList(char* hostname, int mainConnection) {
 	int dataConnection = getDataConnection(hostname, mainConnection);
 	int err;
-	char buffer[100];
+	char response[512];
+	// Send command and get response
+	writeToServer(mainConnection, "L\n");
 
-	err = write(mainConnection, "L\n", 2);
-	if (err < 0) {
-		perror("Write");
+	readFromServer(mainConnection, response, 512);
+
+	if(response[0] == 'E') {
+		errorPrint(response);
 		return -1;
 	}
-
-	err = read(mainConnection, buffer, 100);
-	if (err < 0) {
-		perror("Read");
-		return -1;
-	}
-
-	if(buffer[0] == 'E') {
-		errorPrint(buffer);
-		return -1;
-	}
-	else if(buffer[0] == 'A') {
-		// success
+	else if(response[0] == 'A') {
+		// Fork into two processes
 		pid_t child = fork();
 		if(child == -1) {
 			perror("Fork");
@@ -599,12 +545,14 @@ int serverList(char* hostname, int mainConnection) {
 		}
 
 		if(!child) { // Child process
+			// Replace the stdin descriptor with the data connection and exec into more
 			dup2(dataConnection,0);
-                        execlp("more","more","-5", (char *) NULL);
+                        execlp("more","more","-20", (char *) NULL);
                         perror("execlp");
                         return -1;
 		}
 		else { // Parent
+			// Wait for the child and return
 			err = wait(NULL);
 			if(err == -1) {
 				perror("Wait");
@@ -621,29 +569,34 @@ int serverList(char* hostname, int mainConnection) {
 	return 0;
 }
 
+// This function repressents the ls command. It forks twice and prints the directory to the client.
+// Retrns 0 on success and -1 on failure.
 int list() {
 	int wstatus;
 	int err;
 
+	// Fork for the first time
 	pid_t id = fork();
 	if(id == -1) {
 		perror("Fork");
-		return errno;
+		return -1;
 	}
 
 	if(!id) {// Child
 		int fd[2];
 
+		// Setup a pipe
 		err = pipe(fd);
 		if(err == -1) {
 			perror("pipe");
-			return errno;
+			return -1;
 		}
 
+		// Fork again into two
 		pid_t youngerChild = fork();
 		if(youngerChild == -1) {
 			perror("Fork");
-			return errno;
+			return -1;
 		}
 
 		if(youngerChild) {// Older Child
@@ -657,16 +610,16 @@ int list() {
 			err = close(fd[1]);
 			if(err == -1) {
 				perror("close");
-				return errno;
+				return -1;
 			}
 
 			err = dup2(fd[0],0);
 			if(err == -1) {
 				perror("dup2");
-				return errno;
+				return -1;
 			}
 
-			execlp("more", "more", "-5", (char *) NULL);
+			execlp("more", "more", "-20", (char *) NULL);
 			perror("execvp child");
 			return -1;
 
@@ -676,13 +629,13 @@ int list() {
 			err = close(fd[0]);
 			if(err == -1) {
                                 perror("close");
-                                return errno;
+                                return -1;
                         }
 
                         err = dup2(fd[1],1);
 			if(err == -1) {
                                 perror("dup2");
-                                return errno;
+                                return -1;
                         }
 
 			execlp("ls", "ls", "-a", "-l", (char *) NULL);
@@ -691,6 +644,7 @@ int list() {
 
 		}
 	}
+	// Parent waits for the child then returns.
 	err = wait(NULL);
 	if(err == -1) {
 		perror("wait");
